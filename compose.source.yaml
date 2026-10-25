@@ -1,0 +1,6 @@
+# Optional development build. Production pulls a ready image using compose.yaml.
+services:
+  web:
+    image: shiying-media-tracker:local
+    build:
+      context: .

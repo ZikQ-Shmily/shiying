@@ -1,0 +1,24 @@
+# Only application source and public assets may enter the build context.
+**
+!Dockerfile
+!requirements.txt
+!app.py
+!integrations.py
+!cms_client.py
+!share_scanner.py
+!email_notifications.py
+!static/
+!static/*.html
+!static/*.css
+!static/*.js
+!static/*.svg
+!static/*.png
+# Never include runtime configuration, databases, credentials or local notes.
+**/.env*
+**/*.sqlite3*
+**/*.db
+**/*.db-*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
