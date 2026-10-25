@@ -7,7 +7,6 @@ import http.cookiejar
 import json
 from pathlib import Path
 import secrets
-import sqlite3
 import subprocess
 import tempfile
 import time
@@ -83,10 +82,13 @@ def main(image):
             call(base,'/api/notifications',{'enabled':False,'smtp_host':'smtp.example.invalid','smtp_username':'sender@example.invalid',
                 'smtp_password':fake_mail_key,'from_email':'sender@example.invalid','to_email':'owner@example.invalid'},csrf)
             created = call(base,'/api/items',{'title':'Disposable CI record','kind':'tv','season':1,'sources':[]},csrf)['item']['id']
-            with sqlite3.connect('file:'+str(data/'media.sqlite3')+'?mode=ro',uri=True) as db:
-                values='\n'.join(row[0] for row in db.execute('SELECT value FROM settings'))
-                assert fake_emby_key not in values and fake_mail_key not in values
-            db.close()  # Release the host reader before replacing the non-root container.
+            # Inspect under the application's UID. A host SQLite reader can create
+            # WAL sidecars owned by the runner and make the replacement read-only.
+            inspection = ("import sqlite3\n"
+                "with sqlite3.connect('file:/app/data/media.sqlite3?mode=ro',uri=True) as db:\n"
+                "    values='\\n'.join(row[0] for row in db.execute('SELECT value FROM settings'))\n"
+                f"    assert {fake_emby_key!r} not in values and {fake_mail_key!r} not in values\n")
+            docker('exec', name, 'python', '-c', inspection)
             print('Fresh installation has no personal connections; runtime credentials are saved encrypted.')
             docker('rm','--force',name)
             base = start()
