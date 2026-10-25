@@ -15,7 +15,8 @@ import urllib.request
 
 
 def docker(*args, check=True):
-    return subprocess.run(['docker', *args], check=check, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
+    result = subprocess.run(['docker', *args], check=check, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return (result.stdout + (result.stderr if args[0] == 'logs' else '')).strip()
 
 
 def main(image):
@@ -85,6 +86,7 @@ def main(image):
             with sqlite3.connect('file:'+str(data/'media.sqlite3')+'?mode=ro',uri=True) as db:
                 values='\n'.join(row[0] for row in db.execute('SELECT value FROM settings'))
                 assert fake_emby_key not in values and fake_mail_key not in values
+            db.close()  # Release the host reader before replacing the non-root container.
             print('Fresh installation has no personal connections; runtime credentials are saved encrypted.')
             docker('rm','--force',name)
             base = start()
