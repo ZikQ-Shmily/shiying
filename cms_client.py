@@ -1,4 +1,4 @@
-"""Separate CMS query gateway and subscription executor; OAuth stays at the gateway."""
+"""CMS RE0 queries and fixed-source subscriptions; OAuth stays in CMS."""
 import re
 import math
 from urllib.parse import urlsplit, urlunsplit
@@ -20,7 +20,7 @@ class CMSClient:
         self.url = valid_emby_url(url) if url else ''
         self.token = token
         if not self.url or not self.token:
-            raise IntegrationError('请先配置 RE0 查询端地址与桥接密钥')
+            raise IntegrationError('请先配置用于 RE0 查询的 CMS 地址与连接密钥')
 
     def call(self, action, payload=None, timeout=65):
         result = fetch(self.url + '/api/shiying/' + action,
@@ -33,8 +33,8 @@ class CMSClient:
     def test(self):
         result = self.call('status', timeout=12)
         if result.get('version') != 1 or not result.get('available'):
-            raise IntegrationError('CMS 桥接已连接，请先在 CMS 完成 RE0 授权')
-        return 'CMS 桥接与 RE0 授权已就绪'
+            raise IntegrationError('CMS 已连接，RE0 尚未授权，请在 CMS 中完成授权')
+        return 'RE0 授权正常，查询通过已配置的 CMS 完成'
 
     def candidates(self, item):
         meta = item['tmdb']
@@ -83,23 +83,23 @@ class CMSExecutor:
         self.token = token
         self.native_re0 = native_re0
         if not self.url or not token:
-            raise IntegrationError('请先配置 CMS 执行端地址与下发密钥')
+            raise IntegrationError('请先配置 CloudMediaSync 地址与连接密钥')
 
     def call(self, action, payload=None):
         result = fetch(self.url + '/api/shiying-executor/' + action,
             headers={'Authorization': 'Bearer ' + self.token}, body=payload, timeout=80 if payload else 15,
             error_messages={400: 'CMS 拒绝下发：请检查是否已有独立订阅，或固定来源、发布者已变化'})
         if not isinstance(result, dict) or result.get('success') is not True:
-            raise IntegrationError('CMS 执行端未确认下发成功')
+            raise IntegrationError('CMS 未确认请求成功，请在 CMS 核对执行记录')
         return result
 
     def test(self):
         result = self.call('status')
         if result.get('version') != 1 or not result.get('executor') or not result.get('available') or not result.get('source_guard'):
-            raise IntegrationError('CMS 执行端或 RE0 查询端尚未就绪')
+            raise IntegrationError('CMS 订阅服务、RE0 授权或固定来源保护尚未就绪')
         if self.native_re0 and result.get('query_mode') != 'local':
-            raise IntegrationError('CMS 尚未切换到自身的 RE0 授权，未使用独立查询端回退')
-        return 'CMS 执行端与固定来源保护已就绪'
+            raise IntegrationError('CMS 尚未使用自身的 RE0 授权，请检查 CMS 中的拾影连接配置')
+        return 'CMS 连接正常，固定来源订阅与转存服务已就绪'
 
     def subscribe(self, payload):
         data = self.call('subscribe', payload).get('data')
