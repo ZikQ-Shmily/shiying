@@ -1365,7 +1365,7 @@ def probe_connection(service, config):
         factory = {'tmdb': tmdb_client, 'emby': emby_client, 're0': cms_client, 'cms': executor_client}[service['id']]
         factory(config).test()
         message = {'emby': '系统 API 可达，读取凭据有效', 'tmdb': '官方 API 可达，读取凭据有效',
-                   're0': '已授权 CMS 桥接可达', 'cms': '执行端与固定来源保护已就绪'}[service['id']]
+                   're0': 'CMS 连接正常，RE0 授权有效', 'cms': 'CMS 连接正常，固定来源订阅与转存服务已就绪'}[service['id']]
         return dict(result, state='connected', message=message, checked_at=now())
     except IntegrationError as error:
         return dict(result, state='error', message=str(error)[:300], checked_at=now())
@@ -1703,7 +1703,7 @@ def run_sync(item_id=None):
                 else:
                     current['emby'] = dict(previous, state='error', checked_at=now(), error=comparison_error)
                     if previous.get('state') != 'error':
-                        event(current, 'sync_error', 'EMBY 对比失败，保留上次入库进度')
+                        event(current, 'sync_error', 'Emby 入库比对失败，已保留上次进度。' + comparison_error)
                 if target.get('re0') and current.get('re0') == target['re0'] and (re0_result or re0_error):
                     if re0_result:
                         apply_re0(current, re0_result)

@@ -391,6 +391,7 @@ class IntegrationTests(unittest.TestCase):
         item = self.perform_sync(error=clients.IntegrationError('模拟连接失败'))
         self.assertEqual(item['library_episodes'], '1-3')
         self.assertEqual(item['emby']['state'], 'error')
+        self.assertIn('模拟连接失败', next(e['detail'] for e in item['events'] if e['action'] == 'sync_error'))
         item = self.perform_sync(comparison=dict(state='unmatched', episodes=[], item_ids=[], error='待核对', unnumbered=0))
         self.assertEqual(item['library_episodes'], '1-3')
         self.assertEqual(item['emby']['state'], 'unmatched')

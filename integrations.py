@@ -1,8 +1,13 @@
 """TMDB, Emby library and user authentication clients. Errors omit credentials."""
 import datetime as dt
+import errno
 import json
+import logging
 import re
 import socket
+import ssl
+import time
+from http.client import HTTPException, IncompleteRead, RemoteDisconnected
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -14,6 +19,33 @@ class IntegrationError(Exception):
 
 class EmbyAuthError(IntegrationError):
     pass
+
+
+class IntegrationRequestError(IntegrationError):
+    """Messages and metadata omit requests, raw exception text and credentials."""
+    def __init__(self, message, code, retryable=False):
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+
+
+def connection_error(error):
+    reason = error.reason if isinstance(error, URLError) else error
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return IntegrationRequestError('远端 HTTPS 证书验证失败，请检查证书及服务地址', 'certificate')
+    if isinstance(reason, ssl.SSLError):
+        return IntegrationRequestError('远端 TLS 握手失败，请检查 HTTPS 配置', 'tls')
+    if isinstance(reason, socket.gaierror):
+        return IntegrationRequestError('远端域名解析失败，请检查域名及 DNS', 'dns', reason.errno == socket.EAI_AGAIN)
+    if isinstance(reason, TimeoutError) or getattr(reason, 'errno', None) == errno.ETIMEDOUT:
+        return IntegrationRequestError('远端请求超时', 'timeout', True)
+    if isinstance(reason, ConnectionRefusedError):
+        return IntegrationRequestError('远端拒绝连接，请检查服务及端口', 'refused', True)
+    if isinstance(reason, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, RemoteDisconnected)):
+        return IntegrationRequestError('远端连接中断', 'reset', True)
+    if isinstance(reason, IncompleteRead):
+        return IntegrationRequestError('远端响应未完整接收', 'incomplete', True)
+    return IntegrationRequestError('无法建立或完成远端连接，请检查服务及网络', 'connection', True)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -53,11 +85,13 @@ def fetch(url, headers=None, binary=False, maximum=6 * 1024 * 1024, body=None, t
             message = '连接发生重定向，请填写服务最终地址（包含实际路径）'
         else:
             message = messages.get(error.code, '远端服务暂时不可用（HTTP %s）' % error.code)
-        error_class = EmbyAuthError if error.code in (401, 403) or (
-            error.code == 400 and urlsplit(url).path.endswith('/Users/AuthenticateByName')) else IntegrationError
-        raise error_class(message) from None
-    except (URLError, socket.timeout, TimeoutError, OSError):
-        raise IntegrationError('无法连接远端服务，请检查地址、证书和网络') from None
+        status = error.code
+        error.close()
+        if status in (401, 403) or (status == 400 and urlsplit(url).path.endswith('/Users/AuthenticateByName')):
+            raise EmbyAuthError(message) from None
+        raise IntegrationRequestError(message, 'http_%s' % status, status in (408, 502, 503, 504)) from None
+    except (URLError, OSError, HTTPException) as error:
+        raise connection_error(error) from None
     except (json.JSONDecodeError, UnicodeError, ValueError):
         raise IntegrationError('远端未返回有效的 API 数据，请检查服务地址') from None
 
@@ -180,8 +214,33 @@ class EmbyClient:
         self.api_key = api_key
 
     def get(self, path, **params):
-        return fetch(self.base_url + path + ('?' + urlencode(params) if params else ''),
-                     {'X-Emby-Token': self.api_key})
+        # Retry only library GETs. Login, logout and CMS mutations never use this policy.
+        operation = ('检测连接' if path == '/System/Info' else '读取用户列表' if path == '/Users' else
+                     '查询作品' if path == '/Items' else '读取集数' if path.startswith('/Shows/') else '读取数据')
+        logger = logging.getLogger(__name__)
+        started = time.monotonic()
+        for attempt in (1, 2):
+            try:
+                result = fetch(self.base_url + path + ('?' + urlencode(params) if params else ''),
+                               {'X-Emby-Token': self.api_key}, timeout=12)
+                if attempt > 1:
+                    logger.info('Emby GET recovered operation=%s attempts=%s elapsed_ms=%s',
+                                operation, attempt, round((time.monotonic() - started) * 1000))
+                return result
+            except IntegrationError as error:
+                retry = isinstance(error, IntegrationRequestError) and error.retryable and attempt == 1
+                # Fixed operation names and error codes omit host, query, titles, IDs and tokens.
+                logger.warning('Emby GET failed operation=%s code=%s attempt=%s elapsed_ms=%s retry=%s',
+                               operation, getattr(error, 'code', 'auth' if isinstance(error, EmbyAuthError) else 'response'),
+                               attempt, round((time.monotonic() - started) * 1000), retry)
+                if retry:
+                    time.sleep(1)
+                    continue
+                if isinstance(error, EmbyAuthError):
+                    raise
+                limit = '，单次超时 12 秒' if getattr(error, 'code', '') == 'timeout' else ''
+                raise IntegrationError('Emby %s失败：%s（已尝试 %s 次%s）' %
+                                       (operation, error, attempt, limit)) from None
 
     def test(self):
         data = self.get('/System/Info')
